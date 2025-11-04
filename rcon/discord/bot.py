@@ -1,9 +1,12 @@
+# rcon/discord/bot.py
 import logging
 import threading
 import asyncio
 import time as _time
 import discord
 from discord.ext import commands
+from discord import app_commands
+
 from lib.config import config
 from rcon.discord.serverstatus import ServerStatus
 from rcon.discord.maprotation import MapRotation
@@ -14,6 +17,7 @@ from rcon.discord.comfort import Comfort
 from rcon.discord.artillerycalculator import ArtilleryCalculator
 from rcon.discord.registration import Registration
 from rcon.discord.unregister import Unregister
+from rcon.discord.rbac import apply_staff_check_to_tree  # global RBAC
 
 try:
     from rcon.discord.votemap_panel import VoteMapPanel
@@ -147,8 +151,9 @@ class MainBot(commands.Bot):
         logger.info(f'Logged in as {self.user} (ID: {self.user.id})')
         while not self.shutdown_event.is_set():
             await asyncio.sleep(5)
-    
+
     async def setup_hook(self):
+        # Load cogs first so commands exist
         if config.get("rcon", 0, "server_status", 0, "enabled"):
             logger.info("Start server status")
             await self.add_cog(ServerStatus(self)) 
@@ -190,6 +195,21 @@ class MainBot(commands.Bot):
                 logger.warning(f"VoteMapPanel could not be loaded (continuing without it): {e}")
         else:
             logger.info("VoteMapPanel not present; continuing without it.")
+
+        # Attach staff predicate to every slash command, then sync
+        apply_staff_check_to_tree(self.tree)
+
+        @self.tree.error
+        async def _on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+            if isinstance(error, app_commands.CheckFailure):
+                msg = str(error) if str(error) else "You must hold a staff role to use this."
+                try:
+                    if not interaction.response.is_done():
+                        await interaction.response.send_message(msg, ephemeral=True)
+                    else:
+                        await interaction.followup.send(msg, ephemeral=True)
+                except Exception:
+                    pass
 
         await self.tree.sync()
         logger.info("Slash commands have been synced.")
